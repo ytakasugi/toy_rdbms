@@ -6,6 +6,14 @@ use std::rc::Rc;
 
 use crate::disk::{DiskManager, PageId, PAGE_SIZE};
 
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error(transparent)]
+    Io(#[from] io::Error),
+    #[error("no free buffer available in buffer pool")]
+    NoFreeBuffer,
+}
+
 #[derive(Debug, Default, Clone, Copy, Eq, PartialEq, Hash)]
 pub struct BufferId(usize);
 
@@ -17,6 +25,17 @@ pub struct Buffer {
     pub page_id: PageId,
     pub page: RefCell<Page>,
     pub is_dirty: Cell<bool>,
+}
+
+// `Buffer`構造体に`Default`トレイトを実装
+impl Default for Buffer {
+    fn default() -> Self {
+        Self {
+            page_id: Default::default(),
+            page: RefCell::new([0u8; PAGE_SIZE]),
+            is_dirty: Cell::new(false),
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -54,7 +73,7 @@ impl BufferPool {
         let mut consecutive_pinned = 0;
         // BufferPool内をループし、破棄するBufferを決定する
         let victim_id = loop {
-            // このloop内での`next_victim_id`は、`BufferPool::next_victim_id`に束縛する
+            // このloop内での`next_victim_id`は、`BufferPool.next_victim_id`に束縛する
             let next_victim_id = self.next_victim_id;
             let frame = &mut self[next_victim_id];
             // もし、Bufferの利用回数が0だった場合・・・
@@ -85,8 +104,33 @@ impl BufferPool {
     }
 }
 
+impl Index<BufferId> for BufferPool {
+    type Output = Frame;
+
+    fn index(&self, index: BufferId) -> &Self::Output {
+        &self.buffers[index.0]
+    }
+}
+
+impl IndexMut<BufferId> for BufferPool {
+    fn index_mut(&mut self, index: BufferId) -> &mut Self::Output {
+        &mut self.buffers[index.0]
+    }
+}
+
 pub struct BufferPoolManager {
     disk: DiskManager,
     pool: BufferPool,
     page_table: HashMap<PageId, BufferId>,
+}
+
+impl BufferPoolManager {
+    pub fn new(disk: DiskManager, pool: BufferPool) -> Self {
+        let page_table = HashMap::new();
+        Self {
+            disk,
+            pool,
+            page_table,
+        }
+    }
 }
