@@ -3,11 +3,11 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, prelude::*, SeekFrom};
 use std::path::Path;
 
-use zerocopy::{AsBytes, FromBytes};
+use zerocopy::{AsBytes, FromBytes, FromZeroes};
 
 pub const PAGE_SIZE: usize = 4096;
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, FromBytes, AsBytes)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, FromBytes, FromZeroes, AsBytes)]
 #[repr(C)]
 pub struct PageId(u64);
 
@@ -68,6 +68,7 @@ impl DiskManager {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .open(heap_file_path)?;
 
         Self::new(heap_file)
@@ -104,15 +105,27 @@ mod tests {
 
     #[test]
     fn test() {
-        let (data_file, _data_file_path) = NamedTempFile::new().unwrap().into_parts();
-        let mut _disk = DiskManager::new(data_file).unwrap();
+        let (data_file, data_file_path) = NamedTempFile::new().unwrap().into_parts();
+        let mut disk = DiskManager::new(data_file).unwrap();
         let mut relly = Vec::with_capacity(PAGE_SIZE);
         relly.extend_from_slice(b"relly");
         // Vec<u8> < PAGE_SIZEのため、PAGE_SIZEまで0で埋める
         relly.resize(PAGE_SIZE, 0);
         // rellyがPAGE_SIZEバイトのデータを持っていることを確認
         assert_eq!(relly.len(), PAGE_SIZE);
-    
-    
+        let relly_page_id = disk.allocate_page();
+        disk.write_page_data(relly_page_id, &mut relly).unwrap();
+        let mut rdbms = Vec::with_capacity(PAGE_SIZE);
+        rdbms.extend_from_slice(b"rdbms");
+        rdbms.resize(PAGE_SIZE, 0);
+        let rdbms_page_id = disk.allocate_page();
+        disk.write_page_data(rdbms_page_id, &mut rdbms).unwrap();
+        drop(disk);
+        let mut disk2 = DiskManager::open(&data_file_path).unwrap();
+        let mut buf = vec![0; PAGE_SIZE];
+        disk2.read_page_data(relly_page_id, &mut buf).unwrap();
+        assert_eq!(relly, buf);
+        disk2.read_page_data(rdbms_page_id, &mut buf).unwrap();
+        assert_eq!(rdbms, buf);
     }
 }
