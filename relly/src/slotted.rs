@@ -88,7 +88,7 @@ impl<B: ByteSliceMut> Slotted<B> {
     pub fn insert(&mut self, index: usize, len: usize) -> Option<()> {
         // `self.free_space`がPointer型のインスタンスサイズと`len`の合計よりも小さい場合は、Noneを返す
         if self.free_space() < size_of::<Pointer>() + len {
-            return None
+            return None;
         }
 
         let num_slots_org = self.num_slots();
@@ -102,5 +102,58 @@ impl<B: ByteSliceMut> Slotted<B> {
         pointer.len = len as u16;
 
         Some(())
+    }
+
+    pub fn remove(&mut self, index: usize) {
+        self.resize(index, 0);
+        self.pointers_mut().copy_within(index + 1.., index);
+        self.header.num_slots -= 1;
+    }
+
+    pub fn resize(&mut self, index: usize, len_new: usize) -> Option<()> {
+        let pointers = self.pointers();
+        let len_org = pointers[index].len;
+        let len_incr = len_new as isize - len_org as isize;
+        if len_incr == 0 {
+            return Some(());
+        }
+        if len_incr > self.free_space() as isize {
+            return None;
+        }
+        let free_space_offset = self.header.free_space_offset as usize;
+        let offset_org = pointers[index].offset;
+        let shift_range = free_space_offset..offset_org as usize;
+        let free_space_offset_new = (free_space_offset as isize - len_incr) as usize;
+        self.header.free_space_offset = free_space_offset_new as u16;
+        self.body
+            .as_bytes_mut()
+            .copy_within(shift_range, free_space_offset_new);
+        let mut pointers_mut = self.pointers_mut();
+
+        for pointer in pointers_mut.iter_mut() {
+            if pointer.offset < offset_org {
+                pointer.offset = (pointer.offset as isize + len_incr) as u16;
+            }
+        }
+        let pointer = &mut pointers_mut[index];
+        pointer.len = len_new as u16;
+        if len_new == 0 {
+            pointer.offset = free_space_offset_new as u16;
+        }
+        Some(())
+    }
+}
+
+impl<B: ByteSlice> Index<usize> for Slotted<B> {
+    type Output = [u8];
+
+    fn index(&self, index: usize) -> &Self::Output {
+        self.data(self.pointers()[index])
+    }
+}
+
+impl<B: ByteSliceMut> IndexMut<usize> for Slotted<B> {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        self.data_mut(self.pointers()[index])
     }
 }
