@@ -1,6 +1,9 @@
-use std::cmp::Ordering::{self, Greater, Less};
+use std::{
+    cmp::Ordering::{self, Greater, Less},
+    result,
+};
 
-pub fn binary_search<F>(mut size: usize, mut f: F) -> Result<usize, usize>
+pub fn binary_search_by<F>(mut size: usize, mut f: F) -> Result<usize, usize>
 where
     F: FnMut(usize) -> Ordering,
 {
@@ -18,9 +21,26 @@ where
             right = mid;
         } else {
             // cmpがEqualの場合、探索対象が見つかったと判断し、Ok(mid)を返して探索を終了。
-            return Ok(mid)
+            return Ok(mid);
         }
         size = right - left;
     }
     Err(left)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::binary_search_by;
+
+    #[test]
+    fn test() {
+        let a = vec![1, 2, 3, 5, 8, 13, 21];
+        assert_eq!(Ok(0), binary_search_by(a.len(), |idx| a[idx].cmp(&1)));
+        assert_eq!(Err(0), binary_search_by(a.len(), |idx| a[idx].cmp(&0)));
+        assert_eq!(Ok(1), binary_search_by(a.len(), |idx| a[idx].cmp(&2)));
+        assert_eq!(Ok(4), binary_search_by(a.len(), |idx| a[idx].cmp(&8)));
+        assert_eq!(Err(4), binary_search_by(a.len(), |idx| a[idx].cmp(&6)));
+        assert_eq!(Ok(6), binary_search_by(a.len(), |idx| a[idx].cmp(&21)));
+        assert_eq!(Err(7), binary_search_by(a.len(), |idx| a[idx].cmp(&22)));
+    }
 }
