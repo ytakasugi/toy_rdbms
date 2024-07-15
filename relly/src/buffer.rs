@@ -52,7 +52,6 @@ impl BufferPool {
         let mut buffers = vec![];
         buffers.resize_with(pool_size, Default::default);
         let next_victim_id = BufferId::default();
-
         Self {
             buffers,
             next_victim_id,
@@ -67,30 +66,20 @@ impl BufferPool {
         let pool_size = self.size();
         let mut consecutive_pinned = 0;
         let victim_id = loop {
-            // `next_victim_id`の現在の値を取得
             let next_victim_id = self.next_victim_id;
-            // `next_victim_id`に対応するフレームを取得
             let frame = &mut self[next_victim_id];
-            // `usage_count`が0の場合は、そのバッファが使用されていないため、
-            // そのバッファIDを開放候補として返す
             if frame.usage_count == 0 {
                 break self.next_victim_id;
             }
-            // バッファが使用中かどうか判定
             if Rc::get_mut(&mut frame.buffer).is_some() {
-                // 使用されていなければ、`usage_count`をデクリメントし、`consecutivbe_pinned`を0にリセット
                 frame.usage_count -= 1;
                 consecutive_pinned = 0;
             } else {
-                // 使用されていれば、`consecutive_pinned`をインクリメント
                 consecutive_pinned += 1;
-                // `consecutive_pinned`がプールサイズ以上になった場合は、
-                // すべてのバッファが使用中であるため、Noneを返す
                 if consecutive_pinned >= pool_size {
                     return None;
                 }
             }
-            // 次のバッファIDを計算
             self.next_victim_id = self.increment_id(self.next_victim_id);
         };
         Some(victim_id)
@@ -124,7 +113,6 @@ pub struct BufferPoolManager {
 impl BufferPoolManager {
     pub fn new(disk: DiskManager, pool: BufferPool) -> Self {
         let page_table = HashMap::new();
-
         Self {
             disk,
             pool,
@@ -138,11 +126,9 @@ impl BufferPoolManager {
             frame.usage_count += 1;
             return Ok(Rc::clone(&frame.buffer));
         }
-
         let buffer_id = self.pool.evict().ok_or(Error::NoFreeBuffer)?;
         let frame = &mut self.pool[buffer_id];
         let evict_page_id = frame.buffer.page_id;
-
         {
             let buffer = Rc::get_mut(&mut frame.buffer).unwrap();
             if buffer.is_dirty.get() {
@@ -154,11 +140,9 @@ impl BufferPoolManager {
             self.disk.read_page_data(page_id, buffer.page.get_mut())?;
             frame.usage_count = 1;
         }
-
         let page = Rc::clone(&frame.buffer);
         self.page_table.remove(&evict_page_id);
         self.page_table.insert(page_id, buffer_id);
-
         Ok(page)
     }
 
@@ -166,7 +150,6 @@ impl BufferPoolManager {
         let buffer_id = self.pool.evict().ok_or(Error::NoFreeBuffer)?;
         let frame = &mut self.pool[buffer_id];
         let evict_page_id = frame.buffer.page_id;
-
         let page_id = {
             let buffer = Rc::get_mut(&mut frame.buffer).unwrap();
             if buffer.is_dirty.get() {
@@ -195,5 +178,55 @@ impl BufferPoolManager {
         }
         self.disk.sync()?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempfile;
+
+    #[test]
+    fn test() {
+        let mut hello = Vec::with_capacity(PAGE_SIZE);
+        hello.extend_from_slice(b"hello");
+        hello.resize(PAGE_SIZE, 0);
+        let mut world = Vec::with_capacity(PAGE_SIZE);
+        world.extend_from_slice(b"world");
+        world.resize(PAGE_SIZE, 0);
+
+        let disk = DiskManager::new(tempfile().unwrap()).unwrap();
+        let pool = BufferPool::new(1);
+        let mut bufmgr = BufferPoolManager::new(disk, pool);
+        let page1_id = {
+            let buffer = bufmgr.create_page().unwrap();
+            assert!(bufmgr.create_page().is_err());
+            let mut page = buffer.page.borrow_mut();
+            page.copy_from_slice(&hello);
+            buffer.is_dirty.set(true);
+            buffer.page_id
+        };
+        {
+            let buffer = bufmgr.fetch_page(page1_id).unwrap();
+            let page = buffer.page.borrow();
+            assert_eq!(&hello, page.as_ref());
+        }
+        let page2_id = {
+            let buffer = bufmgr.create_page().unwrap();
+            let mut page = buffer.page.borrow_mut();
+            page.copy_from_slice(&world);
+            buffer.is_dirty.set(true);
+            buffer.page_id
+        };
+        {
+            let buffer = bufmgr.fetch_page(page1_id).unwrap();
+            let page = buffer.page.borrow();
+            assert_eq!(&hello, page.as_ref());
+        }
+        {
+            let buffer = bufmgr.fetch_page(page2_id).unwrap();
+            let page = buffer.page.borrow();
+            assert_eq!(&world, page.as_ref());
+        }
     }
 }
