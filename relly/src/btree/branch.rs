@@ -4,7 +4,6 @@ use zerocopy::{AsBytes, ByteSlice, ByteSliceMut, FromBytes, FromZeroes, Ref};
 
 use super::Pair;
 use crate::bsearch::binary_search_by;
-use crate::buffer::Page;
 use crate::disk::PageId;
 use crate::slotted::{self, Slotted};
 
@@ -21,7 +20,8 @@ pub struct Branch<B> {
 
 impl<B: ByteSlice> Branch<B> {
     pub fn new(bytes: B) -> Self {
-        let (header, body) = Ref::new_from_prefix(bytes).expect("branch header must be aligned");
+        let (header, body) =
+            Ref::new_from_prefix(bytes).expect("branch header must be aligned");
         let body = Slotted::new(body);
         Self { header, body }
     }
@@ -96,7 +96,7 @@ impl<B: ByteSliceMut> Branch<B> {
         Some(())
     }
 
-    fn in_half_full(&self) -> bool {
+    fn is_half_full(&self) -> bool {
         2 * self.body.free_space() < self.body.capacity()
     }
 
@@ -108,7 +108,7 @@ impl<B: ByteSliceMut> Branch<B> {
     ) -> Vec<u8> {
         new_branch.body.initialize();
         loop {
-            if new_branch.in_half_full() {
+            if new_branch.is_half_full() {
                 let index = self
                     .search_slot_id(new_key)
                     .expect_err("key must be unique");
@@ -122,7 +122,7 @@ impl<B: ByteSliceMut> Branch<B> {
                 new_branch
                     .insert(new_branch.num_pairs(), new_key, new_page_id)
                     .expect("new branch must have space");
-                while !new_branch.in_half_full() {
+                while !new_branch.is_half_full() {
                     self.transfer(new_branch);
                 }
                 break;
@@ -138,5 +138,52 @@ impl<B: ByteSliceMut> Branch<B> {
             .expect("no space in dest branch");
         dest.body[next_index].copy_from_slice(&self.body[0]);
         self.body.remove(0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_insert_search() {
+        let mut data = vec![0u8; 100];
+        let mut branch = Branch::new(data.as_mut_slice());
+        branch.initialize(&5u64.to_be_bytes(), PageId(1), PageId(2));
+        branch.insert(1, &8u64.to_be_bytes(), PageId(3)).unwrap();
+        branch.insert(2, &11u64.to_be_bytes(), PageId(4)).unwrap();
+        assert_eq!(PageId(1), branch.search_child(&1u64.to_be_bytes()));
+        assert_eq!(PageId(3), branch.search_child(&5u64.to_be_bytes()));
+        assert_eq!(PageId(3), branch.search_child(&6u64.to_be_bytes()));
+        assert_eq!(PageId(4), branch.search_child(&8u64.to_be_bytes()));
+        assert_eq!(PageId(4), branch.search_child(&10u64.to_be_bytes()));
+        assert_eq!(PageId(2), branch.search_child(&11u64.to_be_bytes()));
+        assert_eq!(PageId(2), branch.search_child(&12u64.to_be_bytes()));
+    }
+    
+    #[test]
+    fn test_split() {
+        let mut data = vec![0u8; 100];
+        let mut branch = Branch::new(data.as_mut_slice());
+        branch.initialize(&5u64.to_be_bytes(), PageId(1), PageId(2));
+        branch.insert(1, &8u64.to_be_bytes(), PageId(3)).unwrap();
+        branch.insert(2, &11u64.to_be_bytes(), PageId(4)).unwrap();
+
+        let mut data2 = vec![0u8; 100];
+        let mut branch2 = Branch::new(data2.as_mut_slice());
+        let mid_key = branch.split_insert(&mut branch2, &10u64.to_be_bytes(), PageId(5));
+        assert_eq!(&8u64.to_be_bytes(), mid_key.as_slice());
+
+        assert_eq!(2, branch.num_pairs());
+        assert_eq!(1, branch2.num_pairs());
+
+        assert_eq!(PageId(1), branch2.search_child(&1u64.to_be_bytes()));
+        assert_eq!(PageId(3), branch2.search_child(&5u64.to_be_bytes()));
+        assert_eq!(PageId(3), branch2.search_child(&6u64.to_be_bytes()));
+
+        assert_eq!(PageId(5), branch.search_child(&9u64.to_be_bytes()));
+        assert_eq!(PageId(4), branch.search_child(&10u64.to_be_bytes()));
+        assert_eq!(PageId(2), branch.search_child(&11u64.to_be_bytes()));
+        assert_eq!(PageId(2), branch.search_child(&12u64.to_be_bytes()));
     }
 }
